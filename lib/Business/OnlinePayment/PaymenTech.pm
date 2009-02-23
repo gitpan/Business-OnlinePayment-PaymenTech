@@ -1,7 +1,7 @@
 package Business::OnlinePayment::PaymenTech;
 use strict;
 
-our $VERSION = '1.0.2';
+our $VERSION = '1.1.0';
 our $AUTHORITY = 'cpan:GPHAT';
 
 =head1 NAME
@@ -17,13 +17,14 @@ Business::OnlinePayment::PaymenTech - PaymenTech backend for Business::OnlinePay
     username        => 'username',
     password        => 'pass',
     invoice_number  => $orderid,
+    trace_number    => $trace_num, # Optional
     action          => 'Authorization Only',
     cvv2val         => 123,
     card_number     => '1234123412341234',
-    exp_date        => '04/10',
+    exp_date        => '0410',
     address         => '123 Test Street',
     name            => 'Test User',
-    amount          => 100
+    amount          => 100 # $1.00
   );
   $tx->submit();
 
@@ -39,6 +40,10 @@ Authorization Only, Authorization and Capture, Capture, Credit
 
 =head1 DESCRIPTION
 
+Business::OnlinePayment::PaymenTech allows you to utilize PaymenTech's
+Orbital SDK credit card services.  You will need to install the Perl Orbital
+SDK for this to work.
+
 For detailed information see L<Business::OnlinePayment>.
 
 =head1 NOTES
@@ -46,15 +51,16 @@ For detailed information see L<Business::OnlinePayment>.
 There are a few rough edges to this module, but having it significantly eased
 a transition from one processor to another.
 
- * time zone is hardcoded to 706 (Central)
- * BIN is hardcoded 001
+=head2 DEFAULTS
+
+=over
+
+=item time zone defaults to 706 (Central)
+
+=item BIN defaults 001
+
+=back
  
-These shortcomings will be fixed in subsequent releases.
-
-Business::OnlinePayment::PaymenTech allows you to utilize PaymenTech's
-Orbital SDK credit card services.  You will need to install the Perl Orbital
-SDK for this to work.
-
 Some extra getters are provided.  They are:
 
  avs_response   - Get the AVS response
@@ -112,14 +118,20 @@ sub submit {
         $req = requestBuilder()->make(ECOMMERCE_REFUND_REQUEST());
         $req->CurrencyCode('840');
         $req->Amount($content{'amount'});
+    } else {
+        die('Unknown Action: '.$content{'action'}."\n");
     }
 
-    $req->BIN('000001');
+    $req->BIN($content{'BIN'} || '000001');
     $req->MerchantID($self->{'merchantid'});
+    if(exists($content{'trace_number'}) && $content{'trace_number'} =~ /^\d+$/)) {
+        $req->traceNumber($content{'trace_number'});
+    }
     $req->OrderID($content{'invoice_number'});
     $req->AccountNum($content{'card_number'});
     $req->Amount(sprintf("%012d", $content{'amount'}));
-    $req->TzCode('706');
+    $req->TzCode($content{'TzCode'} || '706');
+    $req->Comments($content{'comments'}, || '');
 
     $self->{'request'} = $req;
 
@@ -177,11 +189,17 @@ sub _addBillTo {
     $req->AVScity($content{'city'});
     $req->AVSstate($content{'state'});
     $req->AVSzip($content{'zip'});
+    $req->AVScountryCode($content{'country'});
+    $req->AVSphoneNum($content{'phone_number'});
 }
 
 =head1 AUTHOR
 
 Cory 'G' Watson <gphat@cpan.org>
+
+=head2 CONTRIBUTORS
+
+Garth Sainio
 
 =head1 SEE ALSO
 
