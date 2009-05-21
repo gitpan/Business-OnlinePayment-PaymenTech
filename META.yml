@@ -2,8 +2,12 @@
 abstract: 'PaymenTech backend for Business::OnlinePayment'
 author:
   - 'Cory ''G' Watson <gphat@cpan.org>'
+build_requires:
+  ExtUtils::MakeMaker: 6.42
+configure_requires:
+  ExtUtils::MakeMaker: 6.42
 distribution_type: module
-generated_by: 'Module::Install version 0.79'
+generated_by: 'Module::Install version 0.82'
 license: perl
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.4.html
@@ -18,4 +22,4 @@ requires:
   Net::SSLeay: 0
 resources:
   license: http://dev.perl.org/licenses/
-version: 1.3
+version: 1.4
