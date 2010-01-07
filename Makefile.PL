@@ -1,11 +1,19 @@
-use inc::Module::Install;
+use strict;
+use warnings;
+use ExtUtils::MakeMaker;
 
-name    'Business-OnlinePayment-PaymenTech';
-all_from 'lib/Business/OnlinePayment/PaymenTech.pm';
-
-requires    'Net::SSLeay'               => 0;
-requires    'Business::OnlinePayment'   => 0;
-
-auto_install;
-
-WriteAll;
+WriteMakefile(
+    NAME                => 'Business::OnlinePayment::PaymenTech',
+    AUTHOR              => 'Mark Wells <mark@freeside.biz>',
+    VERSION_FROM        => 'lib/Business/OnlinePayment/PaymenTech.pm',
+    ABSTRACT_FROM       => 'lib/Business/OnlinePayment/PaymenTech.pm',
+    ($ExtUtils::MakeMaker::VERSION >= 6.3002
+      ? ('LICENSE'=> 'perl')
+      : ()),
+    PL_FILES            => {},
+    PREREQ_PM => {
+        'Test::More' => 0,
+    },
+    dist                => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
+    clean               => { FILES => 'Business-OnlinePayment-PaymenTech-*' },
+);

@@ -1,258 +1,331 @@
 package Business::OnlinePayment::PaymenTech;
+
 use strict;
+use Carp;
+use Business::OnlinePayment::HTTPS;
+use XML::Simple;
+use Tie::IxHash;
+use vars qw($VERSION $DEBUG @ISA $me);
 
-our $VERSION = '1.6';
+@ISA = qw(Business::OnlinePayment::HTTPS);
+$VERSION = '2.01';
+$DEBUG = 0;
+$me='Business::OnlinePayment::PaymenTech';
 
-=head1 NAME
+my %request_header = (
+  'MIME-VERSION'    =>    '1.0',
+  'Content-Transfer-Encoding' => 'text',
+  'Request-Number'  =>    1,
+  'Document-Type'   =>    'Request',
+  'Interface-Version' =>  "$me $VERSION",
+); # Content-Type has to be passed separately
 
-Business::OnlinePayment::PaymenTech - PaymenTech backend for Business::OnlinePayment
+tie my %new_order, 'Tie::IxHash', (
+  OrbitalConnectionUsername => ':login',
+  OrbitalConnectionPassword => ':password',
+  IndustryType              => 'EC', # Assume industry = Ecommerce
+  MessageType               => ':message_type',
+  BIN                       => ':bin',
+  MerchantID                => ':merchant_id',
+  TerminalID                => ':terminal_id',
+  CardBrand                 => '',
+  AccountNum                => ':card_number',
+  Exp                       => ':expiration',
+  CurrencyCode              => ':currency_code',
+  CurrencyExponent          => ':currency_exp',
+  CardSecValInd             => ':cvvind',
+  CardSecVal                => ':cvv2',
+  AVSzip                    => ':zip',
+  AVSaddress1               => ':address',
+  AVScity                   => ':city',
+  AVSstate                  => ':state',
+  OrderID                   => ':invoice_number',
+  Amount                    => ':amount',
+  Comments                  => ':email', # as per B:OP:WesternACH
+  TxRefNum                  => ':order_number', # used only for Refund
+);
 
-=head1 SYNPOSIS
+tie my %mark_for_capture, 'Tie::IxHash', (
+  OrbitalConnectionUsername => ':login',
+  OrbitalConnectionPassword => ':password',
+  OrderID                   => ':invoice_number',
+  Amount                    => ':amount',
+  BIN                       => ':bin',
+  MerchantID                => ':merchant_id',
+  TerminalID                => ':terminal_id',
+  TxRefNum                  => ':order_number',
+);
 
-  my %options;
-  $options{'merchantid'} = '1234';
-  my $tx = Business::OnlinePayment->new('PaymenTech', %options);
-  $tx->content(
-    username        => 'username',
-    password        => 'pass',
-    invoice_number  => $orderid,
-    trace_number    => $trace_num, # Optional
-    action          => 'Authorization Only',
-    cvn             => 123, # cvv2, cvc2, cid
-    card_number     => '1234123412341234',
-    exp_date        => '0410',
-    address         => '123 Test Street',
-    name            => 'Test User',
-    amount          => 100 # $1.00
-  );
-  $tx->submit;
+tie my %reversal, 'Tie::IxHash', (
+  OrbitalConnectionUsername => ':login',
+  OrbitalConnectionPassword => ':password',
+  TxRefNum                  => ':order_number',
+  TxRefIdx                  => 0,
+  OrderID                   => ':invoice_number',
+  BIN                       => ':bin',
+  MerchantID                => ':merchant_id',
+  TerminalID                => ':terminal_id',
+# Always attempt to reverse authorization.
+  OnlineReversalInd         => 'Y',
+);
 
-  if($tx->is_success) {
-    print "Card processed successfully: ".$tx->authorization."\n";
-  } else {
-    print "Card was rejected: ".$tx->error_message()."\n";
-  }
+my %defaults = (
+  terminal_id => '001',
+  currency    => 'USD',
+  cvvind      => '',
+);
 
-=head1 SUPPORTED ACTIONS
+my @required = ( qw(
+  login
+  password
+  action
+  bin
+  merchant_id
+  invoice_number
+  amount
+  )
+);
 
-Authorization Only, Authorization and Capture, Capture, Credit
-
-By default, Business::Online::PaymenTech uses the MOTO API calls in the
-PaymenTech library.  If you specifically set the C<ecommerce> option to a true
-value in your C<content> then the CC API will be used where applicable,
-notably Authorization, Authorization and Capture and Refund. (Actually,
-refund uses ECOMMERCE_REFUND when C<ecommerce> is true).
-
-=head1 DESCRIPTION
-
-Business::OnlinePayment::PaymenTech allows you to utilize PaymenTech's
-Orbital SDK credit card services.  You will need to install the Perl Orbital
-SDK for this to work.
-
-For detailed information see L<Business::OnlinePayment>.
-
-=head1 NOTES
-
-There are a few rough edges to this module, but having it significantly eased
-a transition from one processor to another.
-
-=head2 DEFAULTS
-
-=over
-
-=item time zone defaults to 706 (Central)
-
-=item BIN defaults 001
-
-=back
- 
-Some extra getters are provided.  They are:
-
- response       - Get the response code
- avs_response   - Get the AVS response
- cvv2_response  - Get the CVV2 response
- transaction_id - Get the PaymenTech assigned Transaction Id
-
-=cut
-
-use base qw(Business::OnlinePayment);
-
-use Paymentech::SDK;
-use Paymentech::eCommerce::RequestBuilder 'requestBuilder';
-use Paymentech::eCommerce::RequestTypes qw(CC_AUTHORIZE_REQUEST MOTO_AUTHORIZE_REQUEST CC_MARK_FOR_CAPTURE_REQUEST ECOMMERCE_REFUND_REQUEST MOTO_REFUND_REQUEST);
-use Paymentech::eCommerce::TransactionProcessor ':alias';
+my %currency_code = (
+# Per ISO 4217.  Add to this as needed.
+  USD => [840, 2],
+  CAD => [124, 2],
+  MXN => [484, 2],
+);
 
 sub set_defaults {
-    my $self = shift();
+    my $self = shift;
 
-    $self->{'_content'} = {};
+    $self->server('orbitalvar1.paymentech.net') unless $self->server; # this is the test server.
+    $self->port('443') unless $self->port;
+    $self->path('/authorize') unless $self->path;
 
-    $self->build_subs(
-        qw(response avs_response cvv2_response transaction_id card_proc_resp)
-    );
+    $self->build_subs(qw( 
+      order_number
+      ProcStatus 
+      ApprovalStatus 
+      StatusMsg 
+      Response
+      RespCode
+      AuthCode
+      AVSRespCode
+      CVV2RespCode
+     ));
+
+}
+
+sub build {
+  my $self = shift;
+  my %content = $self->content();
+  my $skel = shift;
+  tie my %data, 'Tie::IxHash';
+  ref($skel) eq 'HASH' or die 'Tried to build non-hash';
+  foreach my $k (keys(%$skel)) {
+    my $v = $skel->{$k};
+    # Not recursive like B:OP:WesternACH; Paymentech requests are only one layer deep.
+    if($v =~ /^:(.*)/) {
+      # Get the content field with that name.
+      $data{$k} = $content{$1};
+    }
+    else {
+      $data{$k} = $v;
+    }
+  }
+  return \%data;
+}
+
+sub map_fields {
+    my($self) = @_;
+
+    my %content = $self->content();
+    foreach(qw(merchant_id terminal_id currency)) {
+      $content{$_} = $self->{$_} if exists($self->{$_});
+    }
+
+    $self->required_fields('action');
+    my %message_type = 
+                  ('normal authorization' => 'AC',
+                   'authorization only'   => 'A',
+                   'credit'               => 'R',
+                   'void'                 => 'V',
+                   'post authorization'   => 'MFC', # for our use, doesn't go in the request
+                   ); 
+    $content{'message_type'} = $message_type{lc($content{'action'})} 
+      or die "unsupported action: '".$content{'action'}."'";
+
+    foreach (keys(%defaults) ) {
+      $content{$_} = $defaults{$_} if !defined($content{$_});
+    }
+    if(length($content{merchant_id}) == 12) {
+      $content{bin} = '000002' # PNS
+    }
+    elsif(length($content{merchant_id}) == 6) {
+      $content{bin} = '000001' # Salem
+    }
+    else {
+      die "invalid merchant ID: '".$content{merchant_id}."'";
+    }
+
+    @content{qw(currency_code currency_exp)} = @{$currency_code{$content{currency}}}
+      if $content{currency};
+
+    if($content{card_number} =~ /^(4|6011)/) { # Matches Visa and Discover transactions
+      if(defined($content{cvv2})) {
+        $content{cvvind} = 1; # "Value is present"
+      }
+      else {
+        $content{cvvind} = 9; # "Value is not available"
+      }
+    }
+    $content{amount} = int($content{amount}*100);
+    $content{name} = $content{first_name} . ' ' . $content{last_name};
+# According to the spec, the first 8 characters of this have to be unique.
+# The test server doesn't enforce this, but we comply anyway to the extent possible.
+    if(! $content{invoice_number}) {
+      # Choose one arbitrarily
+      $content{invoice_number} ||= sprintf("%04x%04x",time % 2**16,int(rand() * 2**16));
+    }
+
+    $content{expiration} =~ s/\D//g; # Because Freeside sends it as mm/yy, not mmyy.
+
+    $self->content(%content);
+    return;
 }
 
 sub submit {
-    my $self = shift();
+  my($self) = @_;
+  $DB::single = $DEBUG;
 
-    my %content = $self->content();
+  $self->map_fields();
+  my %content = $self->content;
 
-    my $req;
-    if($content{'action'} eq 'Authorization Only') {
-        if(lc($content{industry}) eq 'ecommerce') {
-            $req = requestBuilder()->make(CC_AUTHORIZE_REQUEST());
-            if(defined($content{'cvn'})) {
-                $req->CardSecVal($content{'cvn'});
-            }
+  my @required_fields = @required;
 
-        } else {
-            $req = requestBuilder()->make(MOTO_AUTHORIZE_REQUEST());
-        }
-        $self->_addBillTo($req);
-        # Authorize
-        $req->MessageType('A');
-        $req->CurrencyCode('840');
+  my $request;
+  if( $content{'message_type'} eq 'MFC' ) {
+    $request = { MarkForCapture => $self->build(\%mark_for_capture) };
+    push @required_fields, 'order_number';
+  }
+  elsif( $content{'message_type'} eq 'V' ) {
+    $request = { Reversal => $self->build(\%reversal) };
+  }
+  else { 
+    $request = { NewOrder => $self->build(\%new_order) }; 
+    push @required_fields, qw(
+      card_number
+      expiration
+      currency
+      address
+      city
+      zip
+      );
+  }
 
-        $req->Exp($content{'exp_date'});
-        $req->AccountNum($content{'card_number'});
+  $self->required_fields(@required_fields);
 
-    } elsif($content{'action'} eq 'Capture') {
+  my $post_data = XMLout({ Request => $request }, KeepRoot => 1, NoAttr => 1, NoSort => 1);
 
-        $req = requestBuilder()->make(CC_MARK_FOR_CAPTURE_REQUEST());
-        $req->TxRefNum($content{'tx_ref_num'});
+  if (!$self->test_transaction()) {
+    $self->server('orbital1.paymentech.net');
+  }
 
-    } elsif($content{'action'} eq 'Force Authorization Only') {
-        # ?
-    } elsif($content{'action'} eq 'Authorization and Capture') {
-        if(lc($content{industry}) eq 'ecommerce') {
-            $req = requestBuilder()->make(CC_AUTHORIZE_REQUEST());
-            if(defined($content{'cvn'})) {
-                $req->CardSecVal($content{'cvn'});
-            }
+  warn $post_data if $DEBUG;
+  $DB::single = $DEBUG;
+  my($page,$server_response,%headers) =
+    $self->https_post( { 'Content-Type' => 'application/PTI47', 
+                         'headers' => \%request_header } ,
+                          $post_data);
 
-        } else {
-            $req = requestBuilder()->make(MOTO_AUTHORIZE_REQUEST());
-        }
-        $self->_addBillTo($req);
-        # Authorize and Capture
-        $req->MessageType('AC');
-        $req->CurrencyCode('840');
+  warn $page if $DEBUG;
 
-        $req->Exp($content{'exp_date'});
-        $req->AccountNum($content{'card_number'});
-
-    } elsif($content{'action'} eq 'Credit') {
-        if(lc($content{industry}) eq 'ecommerce') {
-            $req = requestBuilder()->make(ECOMMERCE_REFUND_REQUEST());
-        } else {
-            $req = requestBuilder()->make(MOTO_REFUND_REQUEST());
-        }
-        $req->CurrencyCode($content{'currency_code'} || '840');
-        $req->AccountNum($content{'card_number'});
-
-    } else {
-        die('Unknown Action: '.$content{'action'}."\n");
+  my $response;
+  my $error = '';
+  if ($server_response =~ /200/){
+    $response = XMLin($page, KeepRoot => 0);
+    $self->Response($response);
+    my ($r) = values(%$response);
+    foreach(qw(ProcStatus RespCode AuthCode AVSRespCode CVV2RespCode)) {
+      if(exists($r->{$_}) and
+         !ref($r->{$_})) {
+        $self->$_($r->{$_});
+      }
     }
-
-    $req->BIN($content{'BIN'} || '000001');
-    $req->MerchantID($self->{'merchantid'});
-    if(exists($content{'trace_number'}) && $content{'trace_number'} =~ /^\d+$/) {
-        $req->traceNumber($content{'trace_number'});
+    if(!exists($r->{'ProcStatus'})) {
+      $error = "Malformed response: '$page'";
+      $self->is_success(0);
     }
-    $req->OrderID($content{'invoice_number'});
-
-    $req->Amount(sprintf("%012d", $content{'amount'}));
-    $req->TzCode($content{'TzCode'} || '706');
-    if(exists($content{'comments'})) {
-        $req->Comments($content{'comments'} || '');
+    elsif( $r->{'ProcStatus'} != 0 or 
+          # NewOrders get ApprovalStatus, Reversals don't.
+          ( exists($r->{'ApprovalStatus'}) ?
+            $r->{'ApprovalStatus'} != 1 :
+            $r->{'StatusMsg'} ne 'Approved' )
+          ) {
+      $error = "Transaction error: '". ($r->{'ProcStatusMsg'} || $r->{'StatusMsg'}) . "'";
+      $self->is_success(0);
     }
-
-    $self->{'request'} = $req;
-
-    $self->_post();
-
-    $self->_processResponse();
+    else {
+      # success!
+      $self->is_success(1);
+      # For credits, AuthCode is empty and gets converted to a hashref.
+      $self->authorization($r->{'AuthCode'}) if !ref($r->{'AuthCode'});
+      $self->order_number($r->{'TxRefNum'});
+    }
+  } else {
+    $error = "Server error: '$server_response'";
+  }
+  $self->error_message($error);
 }
 
-sub _post {
-    my $self = shift();
+1;
+__END__
 
-    my %content = $self->content();
+=head1 NAME
 
-    if($self->test_transaction()) {
-        print STDERR $self->{request}->renderAsXML."\n";
-    }
+Business::OnlinePayment::PaymenTech - Chase Paymentech backend for Business::OnlinePayment
 
+=head1 SYNOPSIS
 
-    my $gw_resp = gatewayTP()->process($self->{'request'});
+$trans = new Business::OnlinePayment('PaymenTech');
+$trans->content(
+  login           => "login",
+  password        => "password",
+  merchant_id     => "000111222333",
+  terminal_id     => "001",
+  type            => "CC",
+  card_number     => "5500000000000004",
+  expiration      => "0211",
+  address         => "123 Anystreet",
+  city            => "Sacramento",
+  zip             => "95824",
+  action          => "Normal Authorization",
+  amount          => "24.99",
+
+);
+
+$trans->submit;
+if($trans->is_approved) {
+  print "Approved: ".$trans->authorization;
+
+} else {
+  print "Failed: ".$trans->error_message;
+
 }
 
-sub _processResponse {
-    my $self = shift();
+=head1 NOTES
 
-    my $resp = $self->{'request'}->response();
+The only supported transaction types are Normal Authorization and Credit.  Paymentech 
+supports separate Authorize and Capture actions as well as recurring billing, but 
+those are not yet implemented.
 
-    unless(defined($resp)) {
-        $self->is_success(0);
-        $self->error_message($self->error_message()." No response.");
-        return;
-    }
-
-    if($self->test_transaction()) {
-        print STDERR $resp->raw();
-    }
-
-    $self->transaction_id($resp->value('TxRefNum'));
-    $self->cvv2_response($resp->CVV2ResponseCode());
-    $self->response($resp->ResponseCode());
-    $self->avs_response($resp->AVSResponseCode());
-    $self->authorization($resp->value('AuthCode'));
-    $self->error_message($resp->status());
-
-    if(!$resp->approved()) {
-        $self->is_success(0);
-        return;
-    }
-
-    $self->is_success(1);
-}
-
-sub _addBillTo {
-    my $self = shift();
-    my $req = shift();
-
-    my %content = $self->content();
-
-    $req->AVSname($content{'name'});
-    $req->AVSaddress1($content{'address'});
-    $req->AVSaddress2($content{'address2'});
-    $req->AVScity($content{'city'});
-    $req->AVSstate($content{'state'});
-    $req->AVSzip($content{'zip'});
-    $req->AVScountryCode($content{'country'});
-    if(exists($content{'phone_number'})) {
-        $req->AVSphoneNum($content{'phone_number'});
-    }
-}
+Electronic check processing is not yet supported.
 
 =head1 AUTHOR
 
-Cory 'G' Watson <gphat@cpan.org>
-
-=head2 CONTRIBUTORS
-
-Garth Sainio <gsainio@cpan.org>
+Mark Wells, mark@freeside.biz
 
 =head1 SEE ALSO
 
-perl(1), L<Business::OnlinePayment>.
-
-=head1 COPYRIGHT AND LICENSE
-
-Copyright 2008 by Magazines.com, LLC
-
-You can redistribute and/or modify this code under the same terms as Perl
-itself.
+perl(1). L<Business::OnlinePayment>.
 
 =cut
-1;
+
