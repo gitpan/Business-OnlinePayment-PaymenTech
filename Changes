@@ -1,5 +1,10 @@
 Revision history for Business-OnlinePayment-PaymenTech
 
+2.02    Wed Jan 13 18:40:06 PST 2010
+        - Add B:OP, B:OP:HTTPS and XML::Simple to Makefile.PL PREREQ_PM
+          (closes: CPAN#53646)
+        - Add t/boilerplate.t to MANIFEST
+
 2.01    Sun Nov 29 12:59:44 PST 2009
         Added support for MarkForCapture and Reversal transactions.
 

@@ -4,5 +4,6 @@ Makefile.PL
 README
 lib/Business/OnlinePayment/PaymenTech.pm
 t/00-load.t
+t/boilerplate.t
 t/pod.t
 META.yml                                 Module meta-data (added by MakeMaker)

@@ -8,7 +8,7 @@ use Tie::IxHash;
 use vars qw($VERSION $DEBUG @ISA $me);
 
 @ISA = qw(Business::OnlinePayment::HTTPS);
-$VERSION = '2.01';
+$VERSION = '2.02';
 $DEBUG = 0;
 $me='Business::OnlinePayment::PaymenTech';
 
