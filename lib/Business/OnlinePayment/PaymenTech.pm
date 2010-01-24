@@ -8,7 +8,7 @@ use Tie::IxHash;
 use vars qw($VERSION $DEBUG @ISA $me);
 
 @ISA = qw(Business::OnlinePayment::HTTPS);
-$VERSION = '2.02';
+$VERSION = '2.03';
 $DEBUG = 0;
 $me='Business::OnlinePayment::PaymenTech';
 
@@ -21,52 +21,52 @@ my %request_header = (
 ); # Content-Type has to be passed separately
 
 tie my %new_order, 'Tie::IxHash', (
-  OrbitalConnectionUsername => ':login',
-  OrbitalConnectionPassword => ':password',
-  IndustryType              => 'EC', # Assume industry = Ecommerce
-  MessageType               => ':message_type',
-  BIN                       => ':bin',
-  MerchantID                => ':merchant_id',
-  TerminalID                => ':terminal_id',
-  CardBrand                 => '',
-  AccountNum                => ':card_number',
-  Exp                       => ':expiration',
-  CurrencyCode              => ':currency_code',
-  CurrencyExponent          => ':currency_exp',
-  CardSecValInd             => ':cvvind',
-  CardSecVal                => ':cvv2',
-  AVSzip                    => ':zip',
-  AVSaddress1               => ':address',
-  AVScity                   => ':city',
-  AVSstate                  => ':state',
-  OrderID                   => ':invoice_number',
-  Amount                    => ':amount',
-  Comments                  => ':email', # as per B:OP:WesternACH
-  TxRefNum                  => ':order_number', # used only for Refund
+  OrbitalConnectionUsername => [ ':login', 32 ],
+  OrbitalConnectionPassword => [ ':password', 32 ],
+  IndustryType              => [ 'EC', 2 ],
+  MessageType               => [ ':message_type', 2 ],
+  BIN                       => [ ':bin', 6 ],
+  MerchantID                => [ ':merchant_id', 12 ],
+  TerminalID                => [ ':terminal_id', 3 ],
+  CardBrand                 => [ '', 2 ], 
+  AccountNum                => [ ':card_number', 19 ],
+  Exp                       => [ ':expiration', 4 ],
+  CurrencyCode              => [ ':currency_code', 3 ],
+  CurrencyExponent          => [ ':currency_exp', 6 ],
+  CardSecValInd             => [ ':cvvind', 1 ],
+  CardSecVal                => [ ':cvv2', 4 ],
+  AVSzip                    => [ ':zip', 10 ],
+  AVSaddress1               => [ ':address', 30 ],
+  AVScity                   => [ ':city', 20 ],
+  AVSstate                  => [ ':state', 2 ],
+  OrderID                   => [ ':invoice_number', 22 ], 
+  Amount                    => [ ':amount', 12 ],
+  Comments                  => [ ':email', 64 ],
+  TxRefNum                  => [ ':order_number', 40 ],# used only for Refund
 );
 
 tie my %mark_for_capture, 'Tie::IxHash', (
-  OrbitalConnectionUsername => ':login',
-  OrbitalConnectionPassword => ':password',
-  OrderID                   => ':invoice_number',
-  Amount                    => ':amount',
-  BIN                       => ':bin',
-  MerchantID                => ':merchant_id',
-  TerminalID                => ':terminal_id',
-  TxRefNum                  => ':order_number',
+  OrbitalConnectionUsername => [ ':login', 32 ],
+  OrbitalConnectionPassword => [ ':password', 32 ],
+  OrderID                   => [ ':invoice_number', 22 ],
+  Amount                    => [ ':amount', 12 ],
+  BIN                       => [ ':bin', 6 ],
+  MerchantID                => [ ':merchant_id', 12 ],
+  TerminalID                => [ ':terminal_id', 3 ],
+  TxRefNum                  => [ ':order_number', 40 ],
 );
 
 tie my %reversal, 'Tie::IxHash', (
-  OrbitalConnectionUsername => ':login',
-  OrbitalConnectionPassword => ':password',
-  TxRefNum                  => ':order_number',
-  TxRefIdx                  => 0,
-  OrderID                   => ':invoice_number',
-  BIN                       => ':bin',
-  MerchantID                => ':merchant_id',
-  TerminalID                => ':terminal_id',
+  OrbitalConnectionUsername => [ ':login', 32 ],
+  OrbitalConnectionPassword => [ ':password', 32 ],
+  TxRefNum                  => [ ':order_number', 40 ],
+  TxRefIdx                  => [ '0', 4 ],
+  OrderID                   => [ ':invoice_number', 22 ],
+  BIN                       => [ ':bin', 6 ],
+  MerchantID                => [ ':merchant_id', 12 ],
+  TerminalID                => [ ':terminal_id', 3 ],
+  OnlineReversalInd         => [ 'Y', 1 ],
 # Always attempt to reverse authorization.
-  OnlineReversalInd         => 'Y',
 );
 
 my %defaults = (
@@ -102,16 +102,17 @@ sub set_defaults {
 
     $self->build_subs(qw( 
       order_number
-      ProcStatus 
-      ApprovalStatus 
-      StatusMsg 
-      Response
-      RespCode
-      AuthCode
-      AVSRespCode
-      CVV2RespCode
-     ));
+    ));
 
+    #leaking gateway-specific anmes?  need to be mapped to B:OP standards :)
+    # ProcStatus 
+    # ApprovalStatus 
+    # StatusMsg 
+    # RespCode
+    # AuthCode
+    # AVSRespCode
+    # CVV2RespCode
+    # Response
 }
 
 sub build {
@@ -122,7 +123,8 @@ sub build {
   ref($skel) eq 'HASH' or die 'Tried to build non-hash';
   foreach my $k (keys(%$skel)) {
     my $v = $skel->{$k};
-    # Not recursive like B:OP:WesternACH; Paymentech requests are only one layer deep.
+    my $l;
+    ($v, $l) = @$v if(ref $v eq 'ARRAY');
     if($v =~ /^:(.*)/) {
       # Get the content field with that name.
       $data{$k} = $content{$1};
@@ -130,6 +132,8 @@ sub build {
     else {
       $data{$k} = $v;
     }
+    # Ruthlessly enforce field length.
+    $data{$k} = substr($data{$k}, 0, $l) if($data{$k} and $l);
   }
   return \%data;
 }
@@ -238,42 +242,69 @@ sub submit {
 
   warn $page if $DEBUG;
 
-  my $response;
-  my $error = '';
-  if ($server_response =~ /200/){
-    $response = XMLin($page, KeepRoot => 0);
-    $self->Response($response);
-    my ($r) = values(%$response);
-    foreach(qw(ProcStatus RespCode AuthCode AVSRespCode CVV2RespCode)) {
-      if(exists($r->{$_}) and
-         !ref($r->{$_})) {
-        $self->$_($r->{$_});
-      }
-    }
-    if(!exists($r->{'ProcStatus'})) {
-      $error = "Malformed response: '$page'";
+  my $response = XMLin($page, KeepRoot => 0);
+  #$self->Response($response);
+
+  #use Data::Dumper;
+  #warn Dumper($response) if $DEBUG;
+
+  my ($r) = values(%$response);
+  #foreach(qw(ProcStatus RespCode AuthCode AVSRespCode CVV2RespCode)) {
+  #  if(exists($r->{$_}) and
+  #     !ref($r->{$_})) {
+  #    $self->$_($r->{$_});
+  #  }
+  #}
+
+  foreach (keys %$r) {
+
+    #turn empty hashrefs into the empty string
+    $r->{$_} = '' if ref($r->{$_}) && ! keys %{ $r->{$_} };
+
+    #turn hashrefs with content into scalars
+    $r->{$_} = $r->{$_}{'content'}
+      if ref($r->{$_}) && exists($r->{$_}{'content'});
+  }
+
+  if ($server_response !~ /^200/) {
+
+    $self->is_success(0);
+    my $error = "Server error: '$server_response'";
+    $error .= " / Transaction error: '".
+              ($r->{'ProcStatusMsg'} || $r->{'StatusMsg'}) . "'"
+      if $r->{'ProcStatus'} != 0;
+    $self->error_message($error);
+
+  } else {
+
+    if ( !exists($r->{'ProcStatus'}) ) {
+
       $self->is_success(0);
-    }
-    elsif( $r->{'ProcStatus'} != 0 or 
-          # NewOrders get ApprovalStatus, Reversals don't.
-          ( exists($r->{'ApprovalStatus'}) ?
-            $r->{'ApprovalStatus'} != 1 :
-            $r->{'StatusMsg'} ne 'Approved' )
-          ) {
-      $error = "Transaction error: '". ($r->{'ProcStatusMsg'} || $r->{'StatusMsg'}) . "'";
+      $self->error_message( "Malformed response: '$page'" );
+
+    } elsif ( $r->{'ProcStatus'} != 0 or 
+              # NewOrders get ApprovalStatus, Reversals don't.
+              ( exists($r->{'ApprovalStatus'}) ?
+                $r->{'ApprovalStatus'} != 1 :
+                $r->{'StatusMsg'} ne 'Approved' )
+            )
+    {
+
       $self->is_success(0);
-    }
-    else {
-      # success!
+      $self->error_message( "Transaction error: '".
+                            ($r->{'ProcStatusMsg'} || $r->{'StatusMsg'}) . "'"
+                          );
+
+    } else { # success!
+
       $self->is_success(1);
       # For credits, AuthCode is empty and gets converted to a hashref.
       $self->authorization($r->{'AuthCode'}) if !ref($r->{'AuthCode'});
       $self->order_number($r->{'TxRefNum'});
     }
-  } else {
-    $error = "Server error: '$server_response'";
+
   }
-  $self->error_message($error);
+
 }
 
 1;
@@ -285,39 +316,35 @@ Business::OnlinePayment::PaymenTech - Chase Paymentech backend for Business::Onl
 
 =head1 SYNOPSIS
 
-$trans = new Business::OnlinePayment('PaymenTech');
-$trans->content(
-  login           => "login",
-  password        => "password",
-  merchant_id     => "000111222333",
-  terminal_id     => "001",
-  type            => "CC",
-  card_number     => "5500000000000004",
-  expiration      => "0211",
-  address         => "123 Anystreet",
-  city            => "Sacramento",
-  zip             => "95824",
-  action          => "Normal Authorization",
-  amount          => "24.99",
+  $trans = new Business::OnlinePayment('PaymenTech',
+    merchant_id     => "000111222333",
+    terminal_id     => "001",
+    currency        => "USD", # CAD, MXN
+  );
 
-);
+  $trans->content(
+    login           => "login",
+    password        => "password",
+    type            => "CC",
+    card_number     => "5500000000000004",
+    expiration      => "0211",
+    address         => "123 Anystreet",
+    city            => "Sacramento",
+    zip             => "95824",
+    action          => "Normal Authorization",
+    amount          => "24.99",
+  );
 
-$trans->submit;
-if($trans->is_approved) {
-  print "Approved: ".$trans->authorization;
-
-} else {
-  print "Failed: ".$trans->error_message;
-
-}
+  $trans->submit;
+  if($trans->is_approved) {
+    print "Approved: ".$trans->authorization;
+  } else {
+    print "Failed: ".$trans->error_message;
+  }
 
 =head1 NOTES
 
-The only supported transaction types are Normal Authorization and Credit.  Paymentech 
-supports separate Authorize and Capture actions as well as recurring billing, but 
-those are not yet implemented.
-
-Electronic check processing is not yet supported.
+Electronic check processing and recurring billing are not yet supported.
 
 =head1 AUTHOR
 
