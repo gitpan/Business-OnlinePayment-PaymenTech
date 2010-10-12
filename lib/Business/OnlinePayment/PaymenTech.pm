@@ -8,7 +8,10 @@ use Tie::IxHash;
 use vars qw($VERSION $DEBUG @ISA $me);
 
 @ISA = qw(Business::OnlinePayment::HTTPS);
-$VERSION = '2.03';
+
+$VERSION = '2.04';
+$VERSION = eval $VERSION; # modperlstyle: convert the string into a number
+
 $DEBUG = 0;
 $me='Business::OnlinePayment::PaymenTech';
 
@@ -190,7 +193,9 @@ sub map_fields {
       $content{invoice_number} ||= sprintf("%04x%04x",time % 2**16,int(rand() * 2**16));
     }
 
-    $content{expiration} =~ s/\D//g; # Because Freeside sends it as mm/yy, not mmyy.
+    # Always send as MMYY
+    $content{expiration} =~ s/\D//g; 
+    $content{expiration} = sprintf('%04d',$content{expiration});
 
     $self->content(%content);
     return;

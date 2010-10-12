@@ -1,5 +1,8 @@
 Revision history for Business-OnlinePayment-PaymenTech
 
+2.04    Mon Oct 11 17:30:00 PDT 2010
+        - Always send expiration date as MMYY
+
 2.03    Sun Jan 24 13:19:29 PST 2010
         - Truncate all request fields to their maximum lengths
         - doc: in synopsis example, move merchant_id/terminal_id from content
