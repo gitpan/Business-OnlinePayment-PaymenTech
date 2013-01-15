@@ -1,5 +1,8 @@
 Revision history for Business-OnlinePayment-PaymenTech
 
+2.05    Mon Jan 14 19:07:14 PST 2013
+        - pass AVScountryCode
+
 2.04    Mon Oct 11 17:30:00 PDT 2010
         - Always send expiration date as MMYY
 

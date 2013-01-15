@@ -9,7 +9,7 @@ use vars qw($VERSION $DEBUG @ISA $me);
 
 @ISA = qw(Business::OnlinePayment::HTTPS);
 
-$VERSION = '2.04';
+$VERSION = '2.05';
 $VERSION = eval $VERSION; # modperlstyle: convert the string into a number
 
 $DEBUG = 0;
@@ -42,6 +42,7 @@ tie my %new_order, 'Tie::IxHash', (
   AVSaddress1               => [ ':address', 30 ],
   AVScity                   => [ ':city', 20 ],
   AVSstate                  => [ ':state', 2 ],
+  AVScountryCode            => [ ':country', 2 ],
   OrderID                   => [ ':invoice_number', 22 ], 
   Amount                    => [ ':amount', 12 ],
   Comments                  => [ ':email', 64 ],
@@ -95,6 +96,8 @@ my %currency_code = (
   CAD => [124, 2],
   MXN => [484, 2],
 );
+
+my %paymentech_countries = map { $_ => 1 } qw( US CA GB UK );
 
 sub set_defaults {
     my $self = shift;
@@ -196,6 +199,12 @@ sub map_fields {
     # Always send as MMYY
     $content{expiration} =~ s/\D//g; 
     $content{expiration} = sprintf('%04d',$content{expiration});
+
+    $content{country} ||= 'US';
+    $content{country} = ( $paymentech_countries{ $content{country} }
+                            ? $content{country}
+                            : ''
+                        ),
 
     $self->content(%content);
     return;
